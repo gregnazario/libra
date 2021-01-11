@@ -10,8 +10,8 @@ publish = false
 edition = "2018"
 
 [dependencies]
-anyhow = "1.0.37"
-serde = "1.0.117"
+anyhow = "1.0.38"
+serde = "1.0.119"
 
 bcs = "0.1.2"
 diem-crypto = { path = "../../crypto/crypto", version = "0.1.0" }

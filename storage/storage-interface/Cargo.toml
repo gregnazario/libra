@@ -10,9 +10,9 @@ publish = false
 edition = "2018"
 
 [dependencies]
-anyhow = "1.0.37"
+anyhow = "1.0.38"
 itertools = "0.10.0"
-serde = { version = "1.0.117", default-features = false }
+serde = { version = "1.0.119", default-features = false }
 thiserror = "1.0.23"
 
 bcs = "0.1.2"
