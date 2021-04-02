@@ -16,7 +16,7 @@ diem-types = { path = "../../../types" }
 diem-workspace-hack = { path = "../../../common/workspace-hack" }
 vm = { path = "../../vm" }
 
-anyhow = "1.0.38"
+anyhow = "1.0.40"
 include_dir = "0.6.0"
 bcs = "0.1.2"
 once_cell = "1.7.2"
