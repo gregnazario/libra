@@ -148,9 +148,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.39"
+version = "1.0.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81cddc5f91628367664cc7c69714ff08deee8a3efc54623011c772544d7b2767"
+checksum = "28b2cd92db5cbd74e8e5028f7e27dd7aa3090e89e4f2a197cc7c8dfb69c7063b"
 
 [[package]]
 name = "arbitrary"
@@ -485,37 +485,6 @@ checksum = "8d696c370c750c948ada61c69a0ee2cbbb9c50b1019ddb86d9317157a99c2cae"
 
 [[package]]
 name = "boogie-backend"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "boogie-backend-v2",
- "bytecode",
- "codespan",
- "codespan-reporting",
- "datatest-stable",
- "diem-temppath",
- "diem-workspace-hack",
- "futures",
- "handlebars",
- "itertools 0.10.0",
- "log",
- "move-core-types",
- "move-model",
- "move-prover-test-utils",
- "num 0.4.0",
- "once_cell",
- "pretty",
- "rand 0.8.3",
- "regex",
- "serde",
- "serde_json",
- "tokio",
- "vm",
-]
-
-[[package]]
-name = "boogie-backend-v2"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2676,7 +2645,6 @@ dependencies = [
  "bytecode-source-map",
  "bytecode-verifier",
  "colored",
- "diem-types",
  "diem-workspace-hack",
  "move-core-types",
  "move-coverage",
@@ -4038,9 +4006,9 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
-version = "0.2.89"
+version = "0.2.93"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "538c092e5586f4cdd7dd8078c4a79220e3e168880218124dcbce860f0ea938c6"
+checksum = "9385f66bf6105b241aa65a61cb923ef20efc665cb9f9bb50ac2f0c4b7f378d41"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -4219,7 +4187,6 @@ name = "module-generation"
 version = "0.1.0"
 dependencies = [
  "bytecode-verifier",
- "diem-types",
  "diem-workspace-hack",
  "ir-to-bytecode",
  "move-core-types",
@@ -4306,7 +4273,6 @@ dependencies = [
  "bytecode-verifier",
  "codespan",
  "colored",
- "diem-types",
  "diem-workspace-hack",
  "move-core-types",
  "move-ir-types",
@@ -4440,7 +4406,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "boogie-backend",
- "boogie-backend-v2",
  "bytecode",
  "clap",
  "codespan",
@@ -4451,7 +4416,6 @@ dependencies = [
  "docgen",
  "errmapgen",
  "futures",
- "handlebars",
  "hex",
  "itertools 0.10.0",
  "log",
@@ -5458,6 +5422,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ac73b1112776fc109b2e61909bc46c7e1bf0d7f690ffb1676553acce16d5cda"
 
 [[package]]
+name = "quick-junit"
+version = "0.1.0"
+source = "git+https://github.com/diem/diem-devtools?branch=main#2e349d96e88b662fab9dfe45222e1486513615e1"
+dependencies = [
+ "chrono",
+ "indexmap",
+ "quick-xml",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8533f14c8382aaad0d592c812ac3b826162128b65662331e1127b45c3d18536b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "quote"
 version = "0.6.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6338,9 +6321,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.124"
+version = "1.0.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd761ff957cb2a45fbb9ab3da6512de9de55872866160b23c25f1a841e99d29f"
+checksum = "558dc50e1a5a5fa7112ca2ce4effcb321b0300c0d4ccf0776a9f60cd89031171"
 dependencies = [
  "serde_derive",
 ]
@@ -6415,9 +6398,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.124"
+version = "1.0.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1800f7693e94e186f5e25a28291ae1570da908aff7d97a095dec1e56ff99069b"
+checksum = "b093b7a2bb58203b5da3056c05b4ec1fed827dcfdb37347a8841695263b3d06d"
 dependencies = [
  "proc-macro2 1.0.24",
  "quote 1.0.9",
@@ -7163,7 +7146,7 @@ dependencies = [
 [[package]]
 name = "testrunner"
 version = "0.1.0"
-source = "git+https://github.com/diem/diem-devtools?branch=main#3cc8015b05cf591a5a96801aee394f7df92d946c"
+source = "git+https://github.com/diem/diem-devtools?branch=main#2e349d96e88b662fab9dfe45222e1486513615e1"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -7173,6 +7156,7 @@ dependencies = [
  "duct",
  "num_cpus",
  "once_cell",
+ "quick-junit",
  "rayon",
  "serde",
  "serde_json",
