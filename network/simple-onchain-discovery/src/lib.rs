@@ -32,6 +32,7 @@ use std::{
     task::{Context, Poll},
 };
 use subscription_service::ReconfigSubscription;
+use tokio::runtime::Handle;
 
 pub mod builder;
 
@@ -74,6 +75,25 @@ pub static NETWORK_KEY_MISMATCH: Lazy<IntGaugeVec> = Lazy::new(|| {
     )
     .unwrap()
 });
+
+/// A union type for all implementations of `DiscoveryChangeListenerTrait`
+pub enum DiscoveryChangeListener {
+    ValidatorSet(ValidatorSetChangeListener),
+}
+
+impl DiscoveryChangeListener {
+    pub fn start(self, executor: &Handle) {
+        match self {
+            Self::ValidatorSet(listener) => executor.spawn(Box::pin(listener).start()),
+        };
+    }
+
+    pub fn discovery_source(&self) -> DiscoverySource {
+        match self {
+            DiscoveryChangeListener::ValidatorSet(listener) => listener.discovery_source(),
+        }
+    }
+}
 
 /// A listener for changes on an incoming discovery source.  The entire set of discovered peers must
 /// be provided in each update.
