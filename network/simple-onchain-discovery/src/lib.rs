@@ -34,8 +34,6 @@ use std::{
 use subscription_service::ReconfigSubscription;
 use tokio::runtime::Handle;
 
-pub mod builder;
-
 /// Histogram of idle time of spent in event processing loop
 pub static EVENT_PROCESSING_LOOP_IDLE_DURATION_S: Lazy<DurationHistogram> = Lazy::new(|| {
     DurationHistogram::new(
