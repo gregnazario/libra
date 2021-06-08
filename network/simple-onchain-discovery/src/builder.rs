@@ -1,7 +1,7 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::ValidatorSetChangeListener;
+use crate::{DiscoveryChangeListenerTrait, ValidatorSetChangeListener};
 use channel::diem_channel;
 use diem_config::network_id::NetworkContext;
 use diem_crypto::x25519::PublicKey;
@@ -37,7 +37,7 @@ impl ValidatorSetChangeListenerBuilder {
 
     pub fn start(&mut self, executor: &Handle) -> &mut Self {
         let listener = self.listener.take().expect("Listener must be built");
-        executor.spawn(listener.start());
+        executor.spawn(Box::pin(listener).start());
         self
     }
 }

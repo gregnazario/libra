@@ -17,7 +17,7 @@ use diem_metrics::{
 use diem_network_address_encryption::{Encryptor, Error as EncryptorError};
 use diem_secure_storage::Storage;
 use diem_types::on_chain_config::{OnChainConfigPayload, ValidatorSet, ON_CHAIN_CONFIG_REGISTRY};
-use futures::{sink::SinkExt, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use network::{
     connectivity_manager::{ConnectivityRequest, DiscoverySource},
     counters::inc_by_with_context,
@@ -25,7 +25,12 @@ use network::{
 };
 use once_cell::sync::Lazy;
 use short_hex_str::AsShortHexStr;
-use std::{collections::HashSet, pin::Pin, sync::Arc};
+use std::{
+    collections::HashSet,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 use subscription_service::ReconfigSubscription;
 
 pub mod builder;
@@ -101,7 +106,8 @@ pub trait DiscoveryChangeListenerTrait: Stream<Item = PeerSet> {
             );
             let request = ConnectivityRequest::UpdateDiscoveredPeers(discovery_source, update);
             if let Err(error) = self.update_channel().lock().try_send(request) {
-                error!(
+                inc_by_with_context(&DISCOVERY_COUNTS, self.network_context(), "send_failure", 1);
+                warn!(
                     NetworkSchema::new(self.network_context()),
                     "{} Failed to send update {:?}",
                     self.network_context(),
@@ -109,6 +115,12 @@ pub trait DiscoveryChangeListenerTrait: Stream<Item = PeerSet> {
                 );
             }
         }
+        warn!(
+            NetworkSchema::new(&self.network_context()),
+            "{} {} Discovery actor terminated",
+            self.network_context(),
+            self.discovery_source()
+        );
     }
 }
 
@@ -118,8 +130,33 @@ pub struct ValidatorSetChangeListener {
     network_context: Arc<NetworkContext>,
     expected_pubkey: PublicKey,
     encryptor: Encryptor<Storage>,
-    conn_mgr_reqs_tx: channel::Sender<ConnectivityRequest>,
+    conn_mgr_reqs_tx: Mutex<channel::Sender<ConnectivityRequest>>,
     reconfig_events: diem_channel::Receiver<(), OnChainConfigPayload>,
+}
+
+#[async_trait]
+impl DiscoveryChangeListenerTrait for ValidatorSetChangeListener {
+    fn network_context(&self) -> &NetworkContext {
+        &self.network_context
+    }
+
+    fn discovery_source(&self) -> DiscoverySource {
+        DiscoverySource::OnChainValidatorSet
+    }
+
+    fn update_channel(&self) -> &Mutex<channel::Sender<ConnectivityRequest>> {
+        &self.conn_mgr_reqs_tx
+    }
+}
+
+impl Stream for ValidatorSetChangeListener {
+    type Item = PeerSet;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.reconfig_events)
+            .poll_next(cx)
+            .map(|maybe_config| maybe_config.map(|config| self.extract_updates(config)))
+    }
 }
 
 pub fn gen_simple_discovery_reconfig_subscription(
@@ -132,11 +169,11 @@ fn extract_validator_set_updates(
     network_context: Arc<NetworkContext>,
     encryptor: &Encryptor<Storage>,
     node_set: ValidatorSet,
-) -> Vec<ConnectivityRequest> {
+) -> PeerSet {
     let is_validator = network_context.network_id().is_validator_network();
 
     // Decode addresses while ignoring bad addresses
-    let discovered_peers = node_set
+    node_set
         .into_iter()
         .map(|info| {
             let peer_id = *info.account_address();
@@ -175,12 +212,7 @@ fn extract_validator_set_updates(
             };
             (peer_id, Peer::from_addrs(peer_role, addrs))
         })
-        .collect();
-
-    vec![ConnectivityRequest::UpdateDiscoveredPeers(
-        DiscoverySource::OnChainValidatorSet,
-        discovered_peers,
-    )]
+        .collect()
 }
 
 impl ValidatorSetChangeListener {
@@ -195,14 +227,9 @@ impl ValidatorSetChangeListener {
             network_context,
             expected_pubkey,
             encryptor,
-            conn_mgr_reqs_tx,
+            conn_mgr_reqs_tx: Mutex::new(conn_mgr_reqs_tx),
             reconfig_events,
         }
-    }
-
-    async fn next_reconfig_event(&mut self) -> Option<OnChainConfigPayload> {
-        let _idle_timer = EVENT_PROCESSING_LOOP_IDLE_DURATION_S.start_timer();
-        self.reconfig_events.next().await
     }
 
     fn find_key_mismatches(&self, onchain_keys: Option<&HashSet<PublicKey>>) {
@@ -229,75 +256,30 @@ impl ValidatorSetChangeListener {
             .set(mismatch);
     }
 
-    /// Processes a received OnChainConfigPayload. Depending on role (Validator or FullNode), parses
-    /// the appropriate configuration changes and passes it to the ConnectionManager channel.
-    async fn process_payload(&mut self, payload: OnChainConfigPayload) {
+    fn extract_updates(&mut self, payload: OnChainConfigPayload) -> PeerSet {
         let _process_timer = EVENT_PROCESSING_LOOP_BUSY_DURATION_S.start_timer();
 
         let node_set: ValidatorSet = payload
             .get()
             .expect("failed to get ValidatorSet from payload");
 
-        let updates =
+        let peer_set =
             extract_validator_set_updates(self.network_context.clone(), &self.encryptor, node_set);
-
         // Ensure that the public key matches what's onchain for this peer
-        for request in &updates {
-            if let ConnectivityRequest::UpdateDiscoveredPeers(_, peer_updates) = request {
-                self.find_key_mismatches(
-                    peer_updates
-                        .get(&self.network_context.peer_id())
-                        .map(|peer| &peer.keys),
-                )
-            }
-        }
+        self.find_key_mismatches(
+            peer_set
+                .get(&self.network_context.peer_id())
+                .map(|peer| &peer.keys),
+        );
 
         inc_by_with_context(
             &DISCOVERY_COUNTS,
             &self.network_context,
             "new_nodes",
-            updates.len() as u64,
-        );
-        info!(
-            NetworkSchema::new(&self.network_context),
-            "Update {} Network about new Node IDs",
-            self.network_context.network_id()
+            peer_set.len() as u64,
         );
 
-        for update in updates {
-            match self.conn_mgr_reqs_tx.send(update).await {
-                Ok(()) => (),
-                Err(e) => {
-                    inc_by_with_context(
-                        &DISCOVERY_COUNTS,
-                        &self.network_context,
-                        "send_failure",
-                        1,
-                    );
-                    warn!(
-                        NetworkSchema::new(&self.network_context),
-                        "Failed to send update to ConnectivityManager {}", e
-                    )
-                }
-            }
-        }
-    }
-
-    /// Starts the listener to wait on reconfiguration events.
-    pub async fn start(mut self) {
-        info!(
-            NetworkSchema::new(&self.network_context),
-            "{} Starting OnChain Discovery actor", self.network_context
-        );
-
-        while let Some(payload) = self.next_reconfig_event().await {
-            self.process_payload(payload).await;
-        }
-
-        warn!(
-            NetworkSchema::new(&self.network_context),
-            "{} OnChain Discovery actor terminated", self.network_context,
-        );
+        peer_set
     }
 }
 
@@ -356,7 +338,7 @@ mod tests {
             // Run the test, ensuring we actually stop after a couple seconds in case it fails to fail
             timeout_at(
                 tokio::time::Instant::from(Instant::now() + Duration::from_secs(1)),
-                listener.start(),
+                Box::pin(listener).start(),
             )
             .await
             .expect_err("Expect timeout");
