@@ -14,6 +14,7 @@ anyhow = "1.0.38"
 async-trait = "0.1.50"
 futures = "0.3.12"
 once_cell = "1.7.2"
+serde_yaml = "0.8.17"
 tokio = { version = "1.3.0", features = ["full"] }
 
 channel = {path = "../../common/channel"}
@@ -23,6 +24,7 @@ diem-crypto = {path = "../../crypto/crypto"}
 diem-logger = {path = "../../common/logger"}
 diem-infallible = { path = "../../common/infallible"}
 diem-metrics = {path = "../../common/metrics"}
+diem-time-service = {path = "../../common/time-service"}
 diem-secure-storage = { path = "../../secure/storage" }
 diem-network-address-encryption = {path = "../../config/management/network-address-encryption"}
 diem-types = {path = "../../types"}
@@ -34,5 +36,6 @@ subscription-service = { path = "../../common/subscription-service" }
 
 [dev-dependencies]
 diem-config = { path = "../../config", features = ["testing"]}
-netcore = { path = "../netcore", features = ["testing"] }
+diem-temppath = { path = "../../common/temppath" }
+netcore = { path = "../netcore", features = ["fuzzing"] }
 rand = "0.8.3"

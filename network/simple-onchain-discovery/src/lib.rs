@@ -16,8 +16,9 @@ use diem_metrics::{
 };
 use diem_network_address_encryption::{Encryptor, Error as EncryptorError};
 use diem_secure_storage::Storage;
+use diem_time_service::{Sleep, TimeService, TimeServiceTrait};
 use diem_types::on_chain_config::{OnChainConfigPayload, ValidatorSet, ON_CHAIN_CONFIG_REGISTRY};
-use futures::{Stream, StreamExt};
+use futures::{Future, Stream, StreamExt};
 use network::{
     connectivity_manager::{ConnectivityRequest, DiscoverySource},
     counters::inc_by_with_context,
@@ -27,9 +28,11 @@ use once_cell::sync::Lazy;
 use short_hex_str::AsShortHexStr;
 use std::{
     collections::HashSet,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::Duration,
 };
 use subscription_service::ReconfigSubscription;
 use tokio::runtime::Handle;
@@ -77,18 +80,21 @@ pub static NETWORK_KEY_MISMATCH: Lazy<IntGaugeVec> = Lazy::new(|| {
 /// A union type for all implementations of `DiscoveryChangeListenerTrait`
 pub enum DiscoveryChangeListener {
     ValidatorSet(ValidatorSetChangeListener),
+    File(FileChangeListener),
 }
 
 impl DiscoveryChangeListener {
     pub fn start(self, executor: &Handle) {
         match self {
             Self::ValidatorSet(listener) => executor.spawn(Box::pin(listener).start()),
+            Self::File(listener) => executor.spawn(Box::pin(listener).start()),
         };
     }
 
     pub fn discovery_source(&self) -> DiscoverySource {
         match self {
             DiscoveryChangeListener::ValidatorSet(listener) => listener.discovery_source(),
+            DiscoveryChangeListener::File(listener) => listener.discovery_source(),
         }
     }
 }
@@ -301,6 +307,88 @@ impl ValidatorSetChangeListener {
     }
 }
 
+/// Watcher for a file containing discovered peers at a given interval
+pub struct FileChangeListener {
+    network_context: Arc<NetworkContext>,
+    file_path: PathBuf,
+    update_channel: Mutex<channel::Sender<ConnectivityRequest>>,
+    time_service: TimeService,
+    interval_duration: Duration,
+    delay: Option<Pin<Box<Sleep>>>,
+}
+
+impl FileChangeListener {
+    pub fn new(
+        network_context: Arc<NetworkContext>,
+        file_path: &Path,
+        update_channel: channel::Sender<ConnectivityRequest>,
+        interval_duration: Duration,
+        time_service: TimeService,
+    ) -> Self {
+        FileChangeListener {
+            network_context,
+            file_path: file_path.to_path_buf(),
+            update_channel: Mutex::new(update_channel),
+            time_service,
+            interval_duration,
+            delay: None,
+        }
+    }
+}
+
+#[async_trait]
+impl DiscoveryChangeListenerTrait for FileChangeListener {
+    fn network_context(&self) -> &NetworkContext {
+        &self.network_context
+    }
+
+    fn discovery_source(&self) -> DiscoverySource {
+        DiscoverySource::File
+    }
+
+    fn update_channel(&self) -> &Mutex<channel::Sender<ConnectivityRequest>> {
+        &self.update_channel
+    }
+}
+
+impl<'a> Stream for FileChangeListener {
+    type Item = PeerSet;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Wait for delay, or add the delay for next call
+        if let Some(ref mut delay) = self.delay {
+            futures::ready!(Pin::new(delay).poll(cx));
+        }
+        self.delay = Some(Box::pin(self.time_service.sleep(self.interval_duration)));
+
+        match load_file(self.file_path.as_path()) {
+            Ok(peers) => Poll::Ready(Some(peers)),
+            Err(error) => {
+                // TODO: Do we keep trying to load the file?
+                error!(
+                    NetworkSchema::new(self.network_context()),
+                    "{} Failed to load file: {:?}",
+                    self.network_context(),
+                    error
+                );
+                Poll::Ready(None)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum DiscoveryError {
+    IO(std::io::Error),
+    Parsing(String),
+}
+
+/// Loads a YAML configuration file
+fn load_file(path: &Path) -> Result<PeerSet, DiscoveryError> {
+    let contents = std::fs::read_to_string(path).map_err(DiscoveryError::IO)?;
+    serde_yaml::from_str(&contents).map_err(|err| DiscoveryError::Parsing(err.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,13 +398,14 @@ mod tests {
         x25519::PrivateKey,
         PrivateKey as PK, Uniform,
     };
+    use diem_temppath::TempPath;
     use diem_types::{
         network_address::NetworkAddress, on_chain_config::OnChainConfig,
         validator_config::ValidatorConfig, validator_info::ValidatorInfo, PeerId,
     };
     use futures::executor::block_on;
     use rand::{rngs::StdRng, SeedableRng};
-    use std::{collections::HashMap, time::Instant};
+    use std::{collections::HashMap, str::FromStr, time::Instant};
     use tokio::{
         runtime::Runtime,
         time::{timeout_at, Duration},
@@ -380,6 +469,74 @@ mod tests {
                 .unwrap()
                 .get()
         )
+    }
+
+    #[tokio::test]
+    async fn test_file_listener() {
+        let path = TempPath::new();
+        path.create_as_file().unwrap();
+
+        let path = Arc::new(path);
+
+        let check_interval = Duration::from_millis(100);
+        // TODO: Figure out why mock time doesn't work right
+        let time_service = TimeService::real();
+        let (conn_mgr_reqs_tx, mut conn_mgr_reqs_rx) =
+            channel::new(1, &network::counters::PENDING_CONNECTIVITY_MANAGER_REQUESTS);
+
+        let peers: HashMap<PeerId, Peer> = HashMap::new();
+        let file_contents = serde_yaml::to_vec(&peers).unwrap();
+        std::fs::write(path.as_ref(), file_contents).unwrap();
+        let listener_path = path.clone();
+        let listener_task = async move {
+            let listener = Box::pin(FileChangeListener::new(
+                NetworkContext::mock(),
+                listener_path.as_ref().as_ref(),
+                conn_mgr_reqs_tx,
+                check_interval,
+                time_service,
+            ));
+            listener.start().await
+        };
+
+        tokio::task::spawn(listener_task);
+
+        // Try empty
+        if let Some(ConnectivityRequest::UpdateDiscoveredPeers(
+            DiscoverySource::File,
+            actual_peers,
+        )) = conn_mgr_reqs_rx.next().await
+        {
+            assert_eq!(peers, actual_peers)
+        } else {
+            panic!("No message sent by discovery")
+        }
+
+        // Try with a peer
+        let mut peers = HashMap::new();
+        let addr = NetworkAddress::from_str("/ip4/1.2.3.4/tcp/6180/ln-noise-ik/080e287879c918794170e258bfaddd75acac5b3e350419044655e4983a487120/ln-handshake/0").unwrap();
+        let key = addr.find_noise_proto().unwrap();
+        let addrs = vec![addr];
+        let mut keys = HashSet::new();
+        keys.insert(key);
+        peers.insert(
+            PeerId::random(),
+            Peer::new(addrs, keys, PeerRole::Downstream),
+        );
+        let file_contents = serde_yaml::to_vec(&peers).unwrap();
+        std::fs::write(path.as_ref(), file_contents).unwrap();
+        // Clear old items
+        while conn_mgr_reqs_rx.next().await.is_none() {}
+
+        if let Some(ConnectivityRequest::UpdateDiscoveredPeers(
+            DiscoverySource::File,
+            actual_peers,
+        )) = conn_mgr_reqs_rx.next().await
+        {
+            assert_eq!(peers, actual_peers)
+        } else {
+            panic!("No message sent by discovery")
+        }
     }
 
     fn send_pubkey_update(

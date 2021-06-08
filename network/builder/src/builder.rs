@@ -41,7 +41,8 @@ use network::{
     ProtocolId,
 };
 use network_simple_onchain_discovery::{
-    gen_simple_discovery_reconfig_subscription, DiscoveryChangeListener, ValidatorSetChangeListener,
+    gen_simple_discovery_reconfig_subscription, DiscoveryChangeListener, FileChangeListener,
+    ValidatorSetChangeListener,
 };
 use std::{
     clone::Clone,
@@ -405,6 +406,16 @@ impl NetworkBuilder {
                     simple_discovery_reconfig_rx,
                 );
                 DiscoveryChangeListener::ValidatorSet(listener)
+            }
+            DiscoveryMethod::File(path, interval_duration) => {
+                let listener = FileChangeListener::new(
+                    self.network_context.clone(),
+                    path,
+                    conn_mgr_reqs_tx,
+                    *interval_duration,
+                    self.time_service.clone(),
+                );
+                DiscoveryChangeListener::File(listener)
             }
             DiscoveryMethod::None => return,
         };
