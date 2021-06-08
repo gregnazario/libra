@@ -384,7 +384,7 @@ fn test_private_full_node() {
     let mut private_swarm = private_swarm.lock();
     let private_node = private_swarm.mut_node(0).unwrap();
     op_tool
-        .check_endpoint(NetworkId::Public, private_node.public_address())
+        .check_endpoint(&NetworkId::Public, private_node.public_address())
         .expect_err("Shouldn't be able to connect to private node anonymously");
 }
 
