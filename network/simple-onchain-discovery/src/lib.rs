@@ -1,12 +1,14 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use async_trait::async_trait;
 use channel::diem_channel::{self, Receiver};
 use diem_config::{
-    config::{Peer, PeerRole},
+    config::{Peer, PeerRole, PeerSet},
     network_id::NetworkContext,
 };
 use diem_crypto::x25519::PublicKey;
+use diem_infallible::Mutex;
 use diem_logger::prelude::*;
 use diem_metrics::{
     register_histogram, register_int_counter_vec, register_int_gauge_vec, DurationHistogram,
@@ -15,7 +17,7 @@ use diem_metrics::{
 use diem_network_address_encryption::{Encryptor, Error as EncryptorError};
 use diem_secure_storage::Storage;
 use diem_types::on_chain_config::{OnChainConfigPayload, ValidatorSet, ON_CHAIN_CONFIG_REGISTRY};
-use futures::{sink::SinkExt, StreamExt};
+use futures::{sink::SinkExt, Stream, StreamExt};
 use network::{
     connectivity_manager::{ConnectivityRequest, DiscoverySource},
     counters::inc_by_with_context,
@@ -23,7 +25,7 @@ use network::{
 };
 use once_cell::sync::Lazy;
 use short_hex_str::AsShortHexStr;
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, pin::Pin, sync::Arc};
 use subscription_service::ReconfigSubscription;
 
 pub mod builder;
@@ -67,6 +69,48 @@ pub static NETWORK_KEY_MISMATCH: Lazy<IntGaugeVec> = Lazy::new(|| {
     )
     .unwrap()
 });
+
+/// A listener for changes on an incoming discovery source.  The entire set of discovered peers must
+/// be provided in each update.
+#[async_trait]
+pub trait DiscoveryChangeListenerTrait: Stream<Item = PeerSet> {
+    /// `NetworkContext` for logging
+    fn network_context(&self) -> &NetworkContext;
+
+    /// The `DiscoverySource` for purposes of keeping track of each source separately
+    fn discovery_source(&self) -> DiscoverySource;
+
+    /// The `channel::Sender` for updating networking with a new `PeerSet`
+    fn update_channel(&self) -> &Mutex<channel::Sender<ConnectivityRequest>>;
+
+    async fn start(mut self: Pin<Box<Self>>) {
+        let discovery_source = self.discovery_source();
+        info!(
+            NetworkSchema::new(self.network_context()),
+            "{} Starting {} Discovery",
+            self.network_context(),
+            discovery_source
+        );
+
+        while let Some(update) = self.next().await {
+            trace!(
+                NetworkSchema::new(self.network_context()),
+                "{} Sending update: {:?}",
+                self.network_context(),
+                update
+            );
+            let request = ConnectivityRequest::UpdateDiscoveredPeers(discovery_source, update);
+            if let Err(error) = self.update_channel().lock().try_send(request) {
+                error!(
+                    NetworkSchema::new(self.network_context()),
+                    "{} Failed to send update {:?}",
+                    self.network_context(),
+                    error
+                );
+            }
+        }
+    }
+}
 
 /// Listener which converts published  updates from the OnChainConfig to ConnectivityRequests
 /// for the ConnectivityManager.
